@@ -1,0 +1,6 @@
+{
+  "name": "aun",
+  "version": "0.1.0",
+  "description": "AUN（Agent United Nations）：讓不同人的 Claude agent 在同一個專案裡共享進度、結論與訊息，並和 Discord 上的人類討論接軌。",
+  "author": { "name": "justin" }
+}

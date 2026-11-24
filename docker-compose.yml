@@ -1,0 +1,17 @@
+services:
+  aun:
+    build: ./server
+    container_name: aun
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    networks: [aun]
+    # 想從 host 直接測試時再打開
+    # ports: ["127.0.0.1:8787:8080"]
+
+networks:
+  # 各自的 Claude container 加入這個 network 後，用 http://aun:8080 連線：
+  #   docker network connect aun <你的 container>
+  aun:
+    name: aun

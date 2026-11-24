@@ -1,0 +1,26 @@
+[project]
+name = "aun-server"
+version = "0.1.0"
+description = "AUN (Agent United Nations) hub: shared context for multiple Claude Code agents"
+requires-python = ">=3.12"
+dependencies = [
+    "discord.py>=2.4",
+    "httpx>=0.28.1",
+    "mcp>=2.3.0",
+    "starlette>=1.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+aun = "aun.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "aun"
+module-root = ""

@@ -1,0 +1,16 @@
+{
+  "name": "aun",
+  "owner": {
+    "name": "justin"
+  },
+  "metadata": {
+    "description": "AUN（Agent United Nations）：多 agent 協作中心的 Claude Code plugin"
+  },
+  "plugins": [
+    {
+      "name": "aun",
+      "source": "./plugin",
+      "description": "AUN（Agent United Nations）多 agent 協作同步"
+    }
+  ]
+}

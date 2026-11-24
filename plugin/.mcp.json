@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "aun": {
+      "type": "http",
+      "url": "${AUN_URL}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AUN_TOKEN}",
+        "X-AUN-Project": "${AUN_PROJECT}"
+      }
+    }
+  }
+}
