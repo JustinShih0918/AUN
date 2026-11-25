@@ -85,7 +85,7 @@ def user(uid, name):
 @pytest.fixture()
 def env(tmp_path):
     cfg = Config(db_path=str(tmp_path / "aun.db"), host="", port=0, progress_interval=0, summary_idle=1200,
-                 llm_base_url="", llm_api_key="", llm_model="", discord_token="x", discord_post_summaries=True)
+                 llm_base_url="", llm_api_key="", llm_models=(), discord_token="x", discord_post_summaries=True)
     hub = Hub(cfg)
     hub.add_agent("justin-agent", "justin", owner_discord="justin_dc")  # 只登記 username
     hub.add_agent("partner-agent", "partner", owner_discord="222")
@@ -104,6 +104,12 @@ def test_discord_flows(env):
         # 綁定頻道
         await bot.on_message(channel.post(FakeMessage("<@999> 綁定 demo", justin, mentions=[BOT_USER])))
         assert hub.project_by_channel("42") == "demo"
+
+        # 打 @AUN 時選到 bot 的自動身分組，也要當成 tag 了 bot
+        own_role = SimpleNamespace(id=7, name="AUN", tags=SimpleNamespace(bot_id=BOT_ID))
+        via_role = channel.post(FakeMessage("<@&7> 說明", justin, role_mentions=[own_role]))
+        await bot.on_message(via_role)
+        assert "AUN 使用方式" in via_role.replies[0]
 
         # 沒 tag bot 的訊息完全不處理
         ignored = channel.post(FakeMessage("我們討論一下", justin))

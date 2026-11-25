@@ -4,12 +4,20 @@
 """
 
 import argparse
+import asyncio
 import logging
 import sqlite3
 import sys
+import time
 
 from .config import Config
 from .hub import Hub, HubError
+from .summarizer import LLMError, Summarizer
+
+LLM_SAMPLE = (
+    "test-agent 最新的工作紀錄：\n使用者：把登入改成 JWT\nClaude：已修改 src/auth/jwt.ts，新增 refresh token，"
+    "測試通過。\n工具：Edit src/auth/jwt.ts；Bash npm test\n[commit a1b2c3d] auth 改用 JWT"
+)
 
 
 def main() -> None:
@@ -32,6 +40,8 @@ def main() -> None:
     edit.add_argument("--discord-user")
     edit.add_argument("--discord-role")
 
+    sub.add_parser("llm-test", help="用一段範例紀錄測試摘要模型（確認 API key 和模型名稱可用）")
+
     bind = sub.add_parser("bind", help="把 Discord 頻道綁定到專案（也可以在 Discord 用 @AUN 綁定）")
     bind.add_argument("project")
     bind.add_argument("channel_id")
@@ -45,6 +55,10 @@ def main() -> None:
         from .app import create_app
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
         uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port)
+        return
+
+    if args.cmd == "llm-test":
+        asyncio.run(_llm_test(cfg))
         return
 
     hub = Hub(cfg)
@@ -67,6 +81,18 @@ def main() -> None:
     except (HubError, sqlite3.IntegrityError) as e:
         print(f"錯誤：{e}", file=sys.stderr)
         sys.exit(1)
+
+
+async def _llm_test(cfg: Config) -> None:
+    if not cfg.llm_api_key:
+        sys.exit("錯誤：沒有設定 AUN_LLM_API_KEY")
+    print(f"依序嘗試：{' → '.join(cfg.llm_models)}")
+    start = time.time()
+    try:
+        model, text = await Summarizer(None, cfg).complete(LLM_SAMPLE)  # type: ignore[arg-type]
+    except LLMError as e:
+        sys.exit(f"全部模型都失敗：{e}")
+    print(f"✅ {model}（{time.time() - start:.1f} 秒）\n{text}")
 
 
 if __name__ == "__main__":

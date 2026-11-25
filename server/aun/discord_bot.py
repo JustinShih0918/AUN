@@ -61,8 +61,15 @@ class AunBot(discord.Client):
 
     # ── 人類 → AUN ───────────────────────────────────────────────────
 
+    def _is_own_role(self, role: discord.Role) -> bool:
+        # bot 加入伺服器時 Discord 會自動建立同名身分組，大家打 @AUN 時常會選到它
+        tags = getattr(role, "tags", None)
+        return bool(tags and self.user and tags.bot_id == self.user.id)
+
     async def on_message(self, msg: discord.Message) -> None:
-        if msg.author.bot or self.user is None or self.user not in msg.mentions:
+        if msg.author.bot or self.user is None:
+            return
+        if self.user not in msg.mentions and not any(self._is_own_role(r) for r in msg.role_mentions):
             return
         try:
             await self._handle(msg)
@@ -111,6 +118,8 @@ class AunBot(discord.Client):
 
         targets = []
         for role in msg.role_mentions:
+            if self._is_own_role(role):
+                continue
             agent = self.hub.agent_for_role(str(role.id), role.name)
             if agent is None:
                 await msg.reply(f"⚠️ 身分組 {role.name} 沒有對應的 agent", mention_author=False)

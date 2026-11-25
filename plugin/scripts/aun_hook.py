@@ -10,6 +10,8 @@
   spool/                      AUN 連不上時暫存的寫入，下次成功連線時補送
 """
 
+from __future__ import annotations  # 遠端環境的 python3 可能是 3.7～3.9
+
 import fcntl
 import json
 import os
@@ -224,7 +226,10 @@ def flush_spool() -> None:
             post(item["path"], item["body"], WRITE_TIMEOUT)
         except (OSError, ValueError, KeyError):
             return  # 還是連不上，保留順序，下次再試
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def write(hook: dict, endpoint: str) -> None:

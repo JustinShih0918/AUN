@@ -7,11 +7,28 @@ services:
     volumes:
       - ./data:/data
     networks: [aun]
-    # 想從 host 直接測試時再打開
+    # 想在 hub 主機上直接測試時再打開
     # ports: ["127.0.0.1:8787:8080"]
 
+  # 透過 Tailscale Funnel 把 AUN 公開成 https://aun.<你的 tailnet>.ts.net
+  # 使用端（遠端 server 上的 Claude）不需要安裝 Tailscale
+  tailscale:
+    image: tailscale/tailscale:v1.104.4
+    container_name: aun-tailscale
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      # 決定網址開頭：https://aun.xxx.ts.net（不要用 container 的 hostname，會和 aun 服務撞名）
+      TS_HOSTNAME: aun
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale  # 登入狀態，第一次登入後就不再需要 auth key
+      - ./tailscale/serve.json:/config/serve.json:ro
+    networks: [aun]
+    depends_on: [aun]
+
 networks:
-  # 各自的 Claude container 加入這個 network 後，用 http://aun:8080 連線：
-  #   docker network connect aun <你的 container>
   aun:
     name: aun

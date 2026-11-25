@@ -25,9 +25,10 @@ MAX_INPUT_CHARS = 24000
 
 
 class Summarizer:
-    def __init__(self, hub: Hub, cfg: Config):
+    def __init__(self, hub: Hub, cfg: Config, transport: httpx.AsyncBaseTransport | None = None):
         self.hub = hub
         self.cfg = cfg
+        self._transport = transport  # 測試用
         self._running: set[tuple[str, str]] = set()
         self._loop_task: asyncio.Task | None = None
 
@@ -72,34 +73,54 @@ class Summarizer:
         text = None
         if self.cfg.llm_api_key:
             try:
-                text = await self._llm(agent, prev, items)
-            except Exception as e:  # 免費方案常見速率限制，退回條列就好
+                _, text = await self.complete(_prompt(agent, prev, items))
+            except LLMError as e:  # 全部模型都失敗（限流、下架…），退回條列就好
                 log.warning("LLM 摘要失敗，改用條列：%s", e)
         return self.hub.save_summary(agent, project_id, text or fallback_summary(items), items[-1]["id"])
 
-    async def _llm(self, agent: str, prev: str | None, items: list[dict]) -> str | None:
-        log_text = "\n\n".join(
-            f"[commit {i['meta'].get('sha', '')[:7]}] {i['body']}" if i["kind"] == "commit" else i["body"]
-            for i in items
-        )[-MAX_INPUT_CHARS:]
-        user = (f"上一份進度摘要：\n{prev}\n\n" if prev else "") + f"{agent} 最新的工作紀錄：\n{log_text}"
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{self.cfg.llm_base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.cfg.llm_api_key}"},
-                json={
-                    "model": self.cfg.llm_model,
-                    "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                                 {"role": "user", "content": user}],
-                    "temperature": 0.2,
-                    "max_tokens": 900,
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"].get("content") or ""
-        # 有些推理模型會把思考過程放在 <think> 裡
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
-        return content or None
+    async def complete(self, user: str) -> tuple[str, str]:
+        """依序嘗試設定的模型，回傳 (成功的模型, 內容)。"""
+        errors = []
+        async with httpx.AsyncClient(timeout=300, transport=self._transport) as client:  # NVIDIA 免費方案常要排隊一兩分鐘
+            for model in self.cfg.llm_models:
+                try:
+                    resp = await client.post(
+                        f"{self.cfg.llm_base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {self.cfg.llm_api_key}"},
+                        json={
+                            "model": model,
+                            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                                         {"role": "user", "content": user}],
+                            "temperature": 0.2,
+                            "max_tokens": 2000,
+                        },
+                    )
+                    if resp.status_code != 200:
+                        # NVIDIA 的錯誤內容通常會說明原因（模型不存在、額度用完…）
+                        errors.append(f"{model}：HTTP {resp.status_code} {resp.text[:200]}")
+                        continue
+                    content = resp.json()["choices"][0]["message"].get("content") or ""
+                except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
+                    errors.append(f"{model}：{e}")
+                    continue
+                # 有些推理模型會把思考過程放在 <think> 裡
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+                if content:
+                    return model, content
+                errors.append(f"{model}：回傳空白")
+        raise LLMError("；".join(errors) or "沒有設定任何模型")
+
+
+class LLMError(Exception):
+    pass
+
+
+def _prompt(agent: str, prev: str | None, items: list[dict]) -> str:
+    log_text = "\n\n".join(
+        f"[commit {i['meta'].get('sha', '')[:7]}] {i['body']}" if i["kind"] == "commit" else i["body"]
+        for i in items
+    )[-MAX_INPUT_CHARS:]
+    return (f"上一份進度摘要：\n{prev}\n\n" if prev else "") + f"{agent} 最新的工作紀錄：\n{log_text}"
 
 
 def fallback_summary(items: list[dict]) -> str:

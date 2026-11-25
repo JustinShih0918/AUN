@@ -43,7 +43,7 @@ def create_app(cfg: Config | None = None) -> Starlette:
             summarizer.start()
             bot_task = asyncio.create_task(bot.start(cfg.discord_token)) if bot else None
             log.info("AUN 已啟動（Discord：%s，LLM 摘要：%s）",
-                     "開" if bot else "關", cfg.llm_model if cfg.llm_api_key else "關（使用條列摘要）")
+                     "開" if bot else "關", " → ".join(cfg.llm_models) if cfg.llm_api_key else "關（使用條列摘要）")
             try:
                 yield
             finally:

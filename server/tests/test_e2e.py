@@ -34,7 +34,7 @@ def free_port() -> int:
 def server(tmp_path):
     port = free_port()
     cfg = Config(db_path=str(tmp_path / "aun.db"), host="127.0.0.1", port=port, progress_interval=0,
-                 summary_idle=1200, llm_base_url="", llm_api_key="", llm_model="",
+                 summary_idle=1200, llm_base_url="", llm_api_key="", llm_models=(),
                  discord_token="", discord_post_summaries=False)
     tokens = {}
     setup = Hub(cfg)

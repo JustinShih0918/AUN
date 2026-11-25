@@ -3,14 +3,14 @@
 讓不同人的 Claude Code agent 在同一個專案裡**共享進度、結論與訊息**，並和人類在 Discord 的討論接軌。
 
 ```
-┌─ 你的 container ─────────┐                ┌──────── AUN container ────────┐
-│ Claude（長駐 session）     │  hooks (REST)  │ REST API ─┐                    │
-│  └ aun plugin ───────────┼──────────────►│ MCP ──────┼─► SQLite           │
-│     hooks + MCP 工具      │  MCP 工具       │ 摘要器 ◄──┘──► NVIDIA 等模型    │
-└──────────────────────────┘                │ Discord 總管 bot ◄──► DC 頻道   │
-┌─ 搭檔的 container ────────┐                │                                │
-│  （同上）                  ├──────────────►│                                │
-└──────────────────────────┘                └────────────────────────────────┘
+┌─ 任何地方的 server ───────────┐                ┌─────────── hub 主機（docker compose）───────────┐
+│ 你的 Claude（長駐 session）    │                │                                                │
+│  └ aun plugin（hooks + MCP）──┼──HTTPS──►  Tailscale Funnel ──► aun-tailscale ──► aun          │
+│ 搭檔的 Claude                  │   https://aun.xxx.ts.net                       ├ REST / MCP   │
+│  └ aun plugin ────────────────┼──HTTPS──►（使用端不用裝 Tailscale）              ├ SQLite       │
+└───────────────────────────────┘                │                               ├ 摘要器 ──► NVIDIA
+                                                 │                               └ DC bot ◄──► Discord
+                                                 └────────────────────────────────────────────────┘
 ```
 
 | 時機 | Hook | 做什麼 |
@@ -25,32 +25,69 @@
 
 ---
 
-## 1. 部署 AUN（只要一個人做一次）
+## 1. 部署 hub（在 hub 主機上做一次）
 
 ```bash
-cp .env.example .env          # 填 Discord token、NVIDIA API key（都可以先留空）
+cp .env.example .env            # 填 AUN_DISCORD_TOKEN、AUN_LLM_API_KEY（都可以之後再填）
 docker compose up -d --build
-
-# 每個 agent 註冊一次，記下印出來的 AUN_TOKEN（只顯示一次）
-docker compose exec aun aun agent add justin-agent  --owner justin  --discord-user <justin 的 Discord username>
-docker compose exec aun aun agent add partner-agent --owner partner --discord-user <搭檔的 Discord username>
-
-# 讓各自的 Claude container 連得到 AUN（之後用 http://aun:8080 連線）
-docker network connect aun <你的 container>
-docker network connect aun <搭檔的 container>
 ```
 
-Claude 所在的 container 需要有 `python3` 和 `git`（hook 腳本只用 Python 標準庫）。
+### Tailscale Funnel：讓外網用 HTTPS 連進來
+
+1. 到 https://login.tailscale.com 註冊帳號（可以用 GitHub 或 Google 登入）
+2. 第一次啟動時，Tailscale container 會印出登入網址，用瀏覽器打開並登入：
+   ```bash
+   docker compose logs tailscale | grep login.tailscale.com
+   ```
+   想要不用互動登入的話，也可以在後台的 **Settings → Keys** 產生 auth key，填進 `.env` 的 `TS_AUTHKEY`
+3. 在 Tailscale 後台開啟：
+   - **DNS** 頁面 → **HTTPS Certificates** → Enable
+   - **Funnel**：如果 log 出現提示開啟 Funnel 的網址，打開它並同意
+     ```bash
+     docker compose logs tailscale | grep -i funnel
+     ```
+4. **Machines** 頁面 → `aun` 那台 → `⋯` → **Disable key expiry**。不關的話，大約 180 天後要重新登入
+5. 網址就是 `https://aun.<你的 tailnet>.ts.net`，可以在 Machines 頁面看到。測試一下：
+   ```bash
+   curl https://aun.<你的 tailnet>.ts.net/health      # 回 {"ok":true} 就成功了
+   ```
+   第一次連線需要申請 HTTPS 憑證，可能要等十幾秒。
+
+### 連不到 Funnel 時：前面加一層 Cloudflare Worker
+
+有些網路（例如清大校網）會直接擋 Funnel 的 IP，`curl` 會在幾毫秒內回 `Connection refused`。這時可以讓使用端改連 Cloudflare（免費方案每天 10 萬次請求），再由 Cloudflare 轉給 Funnel：
+
+1. 註冊 / 登入 https://dash.cloudflare.com（不需要網域）
+2. **Workers & Pages** → **Create** → **Start with Hello World** → 名稱填 `aun` → **Deploy**
+3. **Edit code**，把 [`cloudflare/worker.js`](cloudflare/worker.js) 的內容整個貼上，`HUB` 改成你的 Funnel 網址 → **Deploy**
+4. 使用端的 `AUN_URL` 改填 Worker 的網址 `https://aun.<你的帳號>.workers.dev`
+
+### 註冊 agent
+
+```bash
+# 每個 agent 註冊一次，記下印出來的 AUN_TOKEN（只顯示一次）
+docker compose exec aun aun agent add justin-agent  --owner justin  --discord-user <justin 的 Discord 使用者名稱>
+docker compose exec aun aun agent add partner-agent --owner partner --discord-user <搭檔的 Discord 使用者名稱>
+```
+
+`--discord-user` 要填 Discord 的**使用者名稱**（個人資料裡全小寫、唯一的那個），不是顯示名稱。
 
 ## 2. Discord 總管 bot（選用）
 
-1. 到 [Discord Developer Portal](https://discord.com/developers/applications) 建立 Application，再到 **Bot** 頁面：
-   - 取得 token，填進 `.env` 的 `AUN_DISCORD_TOKEN`
-   - 開啟 **Message Content Intent**。bot 仍然只處理有 tag 它的訊息，開這個是為了讀取「被回覆的那則訊息」
-2. 用 OAuth2 URL 邀請 bot 進伺服器。scope 選 `bot`，權限勾選：View Channels、Send Messages、Send Messages in Threads、Read Message History、Add Reactions
-3. 為每個 agent 建一個**可以被提及的身分組**，名稱和 agent 名稱相同（例如 `justin-agent`）。名稱不同的話，用 `aun agent set-discord <agent> --discord-role <身分組 id>` 對應
-4. 在專案頻道輸入 `@AUN 綁定 <專案名稱>`
-5. `docker compose up -d` 重新啟動
+1. [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**
+2. **安裝**（Installation）頁面 → 安裝連結改成 **「無」** → 儲存
+3. **機器人**（Bot）頁面：
+   - **Reset Token**，把 token 填進 `.env` 的 `AUN_DISCORD_TOKEN`
+   - **公開機器人**：關閉
+   - **Message Content Intent**：開啟。bot 仍然只處理有 tag 它的訊息，開這個是為了讀取「被回覆的那則訊息」
+   - 儲存
+4. 邀請 bot 進伺服器（`APPLICATION ID` 在 General Information 頁面）。這個網址已經帶好需要的 5 個權限：檢視頻道、傳送訊息、在討論串中傳送訊息、讀取訊息歷史記錄、新增反應
+   ```
+   https://discord.com/oauth2/authorize?client_id=<APPLICATION ID>&scope=bot&permissions=274877975616
+   ```
+5. 伺服器設定 → 身分組：為每個 agent 建一個身分組，名稱和 agent 名稱相同（例如 `justin-agent`），並開啟 **「允許任何人 @提及此身分組」**。不需要把身分組指派給任何人
+6. `docker compose up -d --force-recreate aun`，讓 AUN 讀到新的 `.env`。`docker compose logs aun` 出現「Discord 已連線」就成功了
+7. 在專案頻道輸入 `@AUN 綁定 <專案名稱>`。專案名稱要和 Claude 那邊設定的 `AUN_PROJECT` 相同
 
 | 在 DC 輸入 | 效果 |
 |---|---|
@@ -58,36 +95,43 @@ Claude 所在的 container 需要有 `python3` 和 `git`（hook 腳本只用 Pyt
 | `@AUN @justin-agent 把登入 API 改成 v2` | 只送給 justin-agent。不是主人下的指令時，agent 會先問主人 |
 | 回覆某則訊息 + `@AUN` | 被回覆的那則一起當作內容；回覆的是 agent 的提問時，就是回答它 |
 | `@AUN 狀態` | 各 agent 最新進度 |
+| `@AUN 說明` | 使用說明 |
 | 對「提議決策」按 ✅ | 確認該決策 |
 
 送達狀態：bot 會回覆一則狀態訊息，例如「justin-agent ✅ · partner-agent ⏳」。全部送達後，原訊息會改成 ✅。
 
-## 3. 在協作專案裡啟用（每個專案一次）
+## 3. 在協作專案裡啟用（每個人、每個專案各做一次）
 
-先把這個 repo push 到你們都能存取的 git（例如 GitHub），它本身就是 plugin marketplace。
+跑 Claude 的環境需要有 `python3` 和 `git`（hook 腳本只用 Python 標準庫）。在**要協作的 repo 根目錄**執行：
 
-在**需要協作的 repo** 裡新增 `.claude/settings.json` 並 commit。互相 fork 的另一方 merge 之後就一起啟用了：
+```bash
+claude plugin marketplace add JustinShih0918/AUN --scope local
+claude plugin install aun@aun --scope local
+```
+
+這兩行會把設定寫進 `.claude/settings.local.json`，只對這個 repo、只對你自己有效。接著在同一個檔案加上 `env` 區塊（token 只放這裡，不要 commit），完成後整個檔案長這樣：
 
 ```json
 {
   "extraKnownMarketplaces": {
-    "aun": { "source": { "source": "github", "repo": "<owner>/<這個 repo>" } }
+    "aun": { "source": { "source": "github", "repo": "JustinShih0918/AUN" } }
   },
   "enabledPlugins": { "aun@aun": true },
   "env": {
-    "AUN_URL": "http://aun:8080",
-    "AUN_PROJECT": "my-project"
+    "AUN_URL": "https://aun.<你的 tailnet>.ts.net",
+    "AUN_PROJECT": "object-scene-graph",
+    "AUN_TOKEN": "aun_..."
   }
 }
 ```
 
-Token **不要 commit**，每個人各自放在 `.claude/settings.local.json`（記得確認它在 `.gitignore` 裡），或設成 container 的環境變數：
+- `AUN_PROJECT`：同一個專案的所有人要填**一樣**的名稱，也要和 Discord 綁定的名稱一樣
+- `AUN_TOKEN`：填你自己那個 agent 的 token
+- 確認 `.claude/settings.local.json` 不會被 commit（在 `.gitignore` 裡）
 
-```json
-{ "env": { "AUN_TOKEN": "aun_..." } }
-```
+最後**重新啟動這個專案的 Claude session**。專案設定只在 session 啟動時讀取，所以**一個協作專案要開一個 session**。沒有啟用的專案完全不受影響。
 
-接著**重新啟動這個專案的 Claude session**。專案層級的設定只在 session 啟動時讀取，所以**一個協作專案要開一個 session**。沒有啟用的專案完全不受影響。
+**確認是否成功**：新 session 的第一次回覆開頭應該會出現「📬 AUN：…」；輸入 `/mcp` 應該會看到 `aun` 已連線。
 
 ## 4. Agent 可以用的工具（MCP）
 
@@ -107,20 +151,25 @@ Token **不要 commit**，每個人各自放在 `.claude/settings.local.json`（
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
+| `TS_AUTHKEY` | （空） | Tailscale auth key；留空就用 log 裡的網址互動登入。只有第一次需要 |
 | `AUN_DISCORD_TOKEN` | （空） | 留空就不啟動 bot |
 | `AUN_DISCORD_POST_SUMMARIES` | `true` | 有新的進度摘要時貼到頻道（不 tag 人） |
 | `AUN_LLM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | 任何 OpenAI 相容的 endpoint（NVIDIA、OpenRouter、Ollama…） |
 | `AUN_LLM_API_KEY` | （空） | 留空就用不需要 LLM 的條列摘要 |
-| `AUN_LLM_MODEL` | `meta/llama-3.3-70b-instruct` | 到 build.nvidia.com 確認可用的模型名稱 |
+| `AUN_LLM_MODEL` | `moonshotai/kimi-k3.1-pro,z-ai/glm-5.3-flash` | 依序嘗試、逗號分隔；用 `aun llm-test` 確認可用 |
 | `AUN_PROGRESS_INTERVAL_MINUTES` | `30` | 別人的 commit／進度最快多久附一次 |
 | `AUN_SUMMARY_IDLE_MINUTES` | `20` | 閒置多久後自動產生摘要 |
+
+改了 `.env` 之後要執行 `docker compose up -d --force-recreate aun` 才會生效。
 
 ## 管理指令
 
 ```bash
 docker compose exec aun aun agent list
-docker compose exec aun aun agent token <agent>          # 重新產生 token
+docker compose exec aun aun llm-test                     # 測試摘要模型和 API key
+docker compose exec aun aun agent token <agent>          # 重新產生 token（舊的立即失效）
 docker compose exec aun aun agent set-discord <agent> --discord-user <id> --discord-role <id>
+docker compose exec aun aun bind <專案> <頻道 id>         # 也可以在 DC 用 @AUN 綁定
 ```
 
 ## 開發
