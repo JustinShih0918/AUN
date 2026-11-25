@@ -37,7 +37,9 @@ def post(path: str, body: dict, timeout: float) -> dict:
     req = urllib.request.Request(
         URL + path,
         data=json.dumps({"project": PROJECT, **body}, ensure_ascii=False).encode(),
-        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"},
+        # 要自訂 User-Agent：Cloudflare 會擋 Python 預設的 Python-urllib（403, error 1010）
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json",
+                 "User-Agent": "aun-hook"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
